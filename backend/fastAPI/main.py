@@ -7,6 +7,10 @@ from pydantic import BaseModel, validator, Field
 from typing import Optional, List, Dict, Any
 from datetime import date, datetime
 import pandas as pd # Import pandas
+import pycountry # for country-codes
+import numpy as np
+import wbdata
+
 
 # Load environment variables from .env file
 load_dotenv()
@@ -242,6 +246,51 @@ class SeasonalityResponse(BaseModel):
     chart_title: str = "Project Start Seasonality"
     data: List[SeasonalityData]
     chart_type: str = "polar"
+
+############################## Classes for interactive map ##############################
+class ProjectRecord(BaseModel):
+    id: Any
+    acronym: Optional[str]
+    title: Optional[str]
+    ec_max_contribution: Optional[float]
+    start_date: Optional[str]
+    field_class: Optional[Any]
+    field: Optional[Any]
+    sub_field: Optional[Any]
+    niche: Optional[Any]
+    funding_scheme: Optional[str]
+    start_year: Optional[int]
+    coordinator_name: Optional[str]
+    # Add other fields as needed
+
+class OrganizationRecord(BaseModel):
+    id: Any
+    name: Optional[str]
+    country: Optional[str]
+    iso_alpha_3: Optional[str]
+    latitude: Optional[float]
+    longitude: Optional[float]
+    activity_type: Optional[str]
+    role: Optional[str]
+    # Add other fields as needed
+
+class CountrySummaryRecord(BaseModel):
+    country: Optional[str]
+    iso_alpha_3: Optional[str]
+    total_contribution: Optional[float]
+    project_count: Optional[int]
+    latitude: Optional[float]
+    longitude: Optional[float]
+    log_contribution: Optional[float]
+    euro_per_100k_inhabitants: Optional[float]
+    # Add other fields as needed
+
+class MapDataResponse(BaseModel):
+    projects: List[ProjectRecord]
+    organizations: List[OrganizationRecord]
+    country_summary: List[CountrySummaryRecord]
+    
+
 
 # --- FastAPI Endpoints ---
 
@@ -1483,3 +1532,210 @@ async def get_project_seasonality():
     except Exception as e:
         print(f"Error generating project seasonality: {e}")
         raise HTTPException(status_code=500, detail=f"Error generating project seasonality: {str(e)}")
+
+
+
+########## endpoints for interactive map ##########
+
+
+def get_iso3(country_name):
+    try:
+        return pycountry.countries.lookup(country_name).alpha_3
+    except Exception:
+        return None
+
+COUNTRY_CENTROIDS = {
+    'MDG': (-18.766947, 46.869107), 'SEN': (14.497401, -14.452362), 'ETH': (9.145, 40.489673),
+    'GBR': (55.378051, -3.435973), 'CHE': (46.818188, 8.227512), 'FRA': (46.603354, 1.888334),
+    'AUS': (-25.274398, 133.775136), 'FIN': (61.92411, 25.748151), 'DNK': (56.26392, 9.501785),
+    'ESP': (40.463667, -3.74922), 'SVN': (46.151241, 14.995463), 'LTU': (55.169438, 23.881275),
+    'POL': (51.919438, 19.145136), 'NLD': (52.132633, 5.291266), 'PRT': (39.399872, -8.224454),
+    'BEL': (50.503887, 4.469936), 'DEU': (51.165691, 10.451526), 'USA': (37.09024, -95.712891),
+    'NOR': (60.472024, 8.468946), 'TUR': (38.963745, 35.243322), 'ZAF': (-30.559482, 22.937506),
+    'ZMB': (-13.133897, 27.849332), 'ZWE': (-19.015438, 29.154857), 'CIV': (7.539989, -5.54708),
+    'SVK': (48.669026, 19.699024), 'BGR': (42.733883, 25.48583), 'ROU': (45.943161, 24.96676),
+    'GRC': (39.074208, 21.824312), 'ISR': (31.046051, 34.851612), 'ITA': (41.87194, 12.56738),
+    'EST': (58.595272, 25.013607), 'IRL': (53.41291, -8.24389), 'HUN': (47.162494, 19.503304),
+    'CZE': (49.817492, 15.472962), 'AUT': (47.516231, 14.550072), 'LVA': (56.879635, 24.603189),
+    'UKR': (48.379433, 31.16558), 'GIN': (9.945587, -9.696645), 'MLI': (17.570692, -3.996166),
+    'SWE': (60.128161, 18.643501), 'BWA': (-22.328474, 24.684866), 'MOZ': (-18.665695, 35.529562),
+    'LSO': (-29.609988, 28.233608), 'SWZ': (-26.522503, 31.465866), 'BFA': (12.238333, -1.561593),
+    'GHA': (7.946527, -1.023194), 'CYP': (35.126413, 33.429859), 'MLT': (35.937496, 14.375416),
+    'CMR': (7.369722, 12.354722), 'LUX': (49.815273, 6.129583), 'NGA': (9.081999, 8.675277),
+    'TZA': (-6.369028, 34.888822), 'MWI': (-13.254308, 34.301525), 'UGA': (1.373333, 32.290275),
+    'KEN': (-0.023559, 37.906193), 'CHN': (35.86166, 104.195397), 'IND': (20.593684, 78.96288),
+    'KOR': (35.907757, 127.766922), 'SRB': (44.016521, 21.005859), 'EGY': (26.820553, 30.802498),
+    'ARG': (-38.416097, -63.616672), 'HRV': (45.1, 15.2), 'ARM': (40.069099, 45.038189),
+    'BRA': (-14.235004, -51.92528), 'CPV': (16.5388, -23.0418), 'CAN': (56.130366, -106.346771),
+    'TUN': (33.886917, 9.537499), 'AGO': (-11.202692, 17.873887), 'STP': (0.18636, 6.613081),
+    'COL': (4.570868, -74.297333), 'BTN': (27.514162, 90.433601), 'PRY': (-23.442503, -58.443832),
+    'CAF': (6.611111, 20.939444), 'DZA': (28.033886, 1.659626), 'GNQ': (1.650801, 10.267895),
+    'LKA': (7.873054, 80.771797), 'CHL': (-35.675147, -71.542969), 'ALB': (41.153332, 20.168331),
+    'ISL': (64.963051, -19.020835), 'COD': (-4.038333, 21.758664), 'BDI': (-3.373056, 29.918886),
+    'MEX': (23.634501, -102.552784), 'MNE': (42.708678, 19.37439), 'MNG': (46.862496, 103.846656),
+    'THA': (15.870032, 100.992541), 'KAZ': (48.019573, 66.923684), 'JPN': (36.204824, 138.252924),
+    'VAT': (41.902916, 12.453389), 'NZL': (-40.900557, 174.885971), 'ECU': (-1.831239, -78.183406),
+    'MDA': (47.411631, 28.369885), 'UZB': (41.377491, 64.585262), 'AZE': (40.143105, 47.576927),
+    'SGP': (1.352083, 103.819836), 'PAK': (30.375321, 69.345116), 'TWN': (23.69781, 120.960515),
+    'GUM': (13.444304, 144.793731), 'CRI': (9.748917, -83.753428), 'PER': (-9.189967, -75.015152),
+    'LBN': (33.854721, 35.862285), 'BIH': (43.915886, 17.679076), 'MAR': (31.791702, -7.09262),
+    'VNM': (14.058324, 108.277199), 'MKD': (41.608635, 21.745275), 'BEN': (9.30769, 2.315834),
+    'GAB': (-0.803689, 11.609444), 'MYS': (4.210484, 101.975766), 'XKX': (42.602636, 20.902977),
+    'PSE': (31.952162, 35.233154), 'PHL': (12.879721, 121.774017), 'SAU': (23.885942, 45.079162),
+    'RWA': (-1.940278, 29.873888), 'IDN': (-0.789275, 113.921327), 'FRO': (61.892635, -6.911806),
+    'CUB': (21.521757, -77.781167), 'KGZ': (41.20438, 74.766098), 'BGD': (23.684994, 90.356331),
+    'PYF': (-17.679742, -149.406843), 'LBR': (6.428055, -9.429499), 'SLE': (8.460555, -11.779889),
+    'VEN': (6.42375, -66.58973), 'GEO': (42.315407, 43.356892), 'JOR': (30.585164, 36.238414),
+    'FJI': (-17.713371, 178.065032), 'URY': (-32.522779, -55.765835), 'COG': (-0.228021, 15.827659),
+    'AFG': (33.93911, 67.709953), 'IRQ': (33.223191, 43.679291), 'HKG': (22.396428, 114.109497),
+    'TJK': (38.861034, 71.276093), 'TKM': (38.969719, 59.556278), 'BOL': (-16.290154, -63.588653),
+    'MDV': (3.202778, 73.22068), 'IMN': (54.236107, -4.548056), 'BRB': (13.193887, -59.543198),
+    'BHR': (25.930414, 50.637772), 'GRL': (71.706936, -42.604303), 'GNQ': (1.650801, 10.267895),
+    'DMA': (15.415, -61.371), 'MHL': (7.1315, 171.1845),
+}
+
+# Get world populations from worldbank data
+# Fetch population data from World Bank for 2020
+data_date = datetime(2020, 1, 1)
+indicators = {'SP.POP.TOTL': 'Population'}
+
+df = wbdata.get_dataframe(indicators, date=data_date).reset_index()
+
+# Function to get ISO-3 country code using pycountry
+def get_iso3(country_name):
+    try:
+        return pycountry.countries.lookup(country_name).alpha_3
+    except LookupError:
+        return None
+
+# Apply ISO-3 code lookup
+df['ISO3'] = df['country'].apply(get_iso3)
+
+# Drop rows where ISO3 code couldn't be found (optional)
+df = df.dropna(subset=['ISO3'])
+
+# Sort by population descending
+df = df.sort_values(by='Population', ascending=False).reset_index(drop=True)
+COUNTRY_POPULATIONS = df.set_index('ISO3')['Population'].to_dict()
+
+# use filters to retrieve necessary information only
+@app.get("/map-data", response_model=MapDataResponse, tags=["Map"])
+async def get_map_data(
+    country: Optional[str] = Query(None, description="ISO-3 country code (e.g., 'BEL') or 'all'"),
+    funding_scheme: Optional[str] = Query(None, description="Funding scheme or 'all'"),
+    year: Optional[int] = Query(None, description="Project start year or 'all'"),
+    field_class: Optional[str] = Query(None, description="Comma-separated list for multi-select, or 'all'"),
+    field: Optional[str] = Query(None, description="Comma-separated list for multi-select, or 'all'"),
+    sub_field: Optional[str] = Query(None, description="Comma-separated list for multi-select, or 'all'"),
+    niche: Optional[str] = Query(None, description="Comma-separated list for multi-select, or 'all'"),
+    activity_type: Optional[str] = Query(None, description="Organization activity type or 'all'"),
+    role: Optional[str] = Query(None, description="Organization role or 'all'")
+):
+    """
+    Returns all data needed for the interactive map, filtered as in the Dash app.
+    """
+    try:
+        # Fetch data from Supabase
+        projects = supabase.table("projects").select("*").execute().data or []
+        organizations = supabase.table("organizations").select("*").execute().data or []
+
+        df_proj = pd.DataFrame(projects)
+        df_org = pd.DataFrame(organizations)
+
+        # --- FILTERING LOGIC ---
+
+        # Funding scheme
+        if funding_scheme and funding_scheme != 'all':
+            df_proj = df_proj[df_proj['funding_scheme'] == funding_scheme]
+            df_org = df_org[df_org['id'].isin(df_proj['id'])]
+
+        # Year
+        if year and year != 'all':
+            df_proj['start_year'] = pd.to_datetime(df_proj['start_date'], errors='coerce').dt.year
+            df_proj = df_proj[df_proj['start_year'] == int(year)]
+            df_org = df_org[df_org['id'].isin(df_proj['id'])]
+
+        # Multi-select fields (field_class, field, sub_field, niche)
+        def filter_by_list_column(df, col, selected):
+            if not selected or selected == 'all':
+                return df
+            selected_list = [s.strip() for s in selected.split(',')]
+            # Convert column to list if needed
+            def to_list(val):
+                if isinstance(val, list):
+                    return [str(x).strip() for x in val if pd.notnull(x)]
+                if isinstance(val, str):
+                    val = val.strip()
+                    if val.startswith('[') and val.endswith(']'):
+                        val = val[1:-1]
+                    return [v.strip() for v in val.split(',') if v.strip()]
+                if pd.isnull(val):
+                    return []
+                return [str(val).strip()]
+            df[col] = df[col].apply(to_list)
+            return df[df[col].apply(lambda x: any(item in x for item in selected_list))]
+
+        for col, selected in [
+            ('field_class', field_class),
+            ('field', field),
+            ('sub_field', sub_field),
+            ('niche', niche)
+        ]:
+            df_proj = filter_by_list_column(df_proj, col, selected)
+            df_org = df_org[df_org['id'].isin(df_proj['id'])]
+
+        # Activity type
+        if activity_type and activity_type != 'all':
+            df_org = df_org[df_org['activity_type'] == activity_type]
+
+        # Role
+        if role and role != 'all':
+            df_org = df_org[df_org['role'] == role]
+
+        # Country (ISO-3)
+        if country and country != 'all':
+            df_org['iso_alpha_3'] = df_org['country'].apply(get_iso3)
+            df_org = df_org[df_org['iso_alpha_3'] == country]
+            df_proj = df_proj[df_proj['id'].isin(df_org['id'])]
+
+        # --- ENRICH ORGANIZATIONS ---
+        if not df_org.empty:
+            df_org['iso_alpha_3'] = df_org['country'].apply(get_iso3)
+            df_org['latitude'] = df_org['iso_alpha_3'].map(lambda iso: COUNTRY_CENTROIDS.get(iso, (None, None))[0])
+            df_org['longitude'] = df_org['iso_alpha_3'].map(lambda iso: COUNTRY_CENTROIDS.get(iso, (None, None))[1])
+
+        # --- AGGREGATE COUNTRY SUMMARY ---
+        if not df_org.empty:
+            df_org['ec_contribution'] = pd.to_numeric(df_org['ec_contribution'], errors='coerce').fillna(0)
+            country_summary = (
+                df_org.groupby('iso_alpha_3')
+                .agg(
+                    country=('country', 'first'),
+                    total_contribution=('ec_contribution', 'sum'),
+                    project_count=('id', 'nunique')
+                )
+                .reset_index()
+            )
+            country_summary['latitude'] = country_summary['iso_alpha_3'].map(lambda iso: COUNTRY_CENTROIDS.get(iso, (None, None))[0])
+            country_summary['longitude'] = country_summary['iso_alpha_3'].map(lambda iso: COUNTRY_CENTROIDS.get(iso, (None, None))[1])
+            country_summary['log_contribution'] = np.log1p(country_summary['total_contribution'])
+            country_summary['population'] = country_summary['iso_alpha_3'].map(lambda iso: COUNTRY_POPULATIONS.get(iso))
+            country_summary['euro_per_100k_inhabitants'] = country_summary.apply(
+                lambda row: row['total_contribution'] / row['population'] * 100000 if row['population'] else None, axis=1
+            )
+            country_summary_records = country_summary.replace({np.nan: None}).to_dict(orient='records')
+        else:
+            country_summary_records = []
+
+        # --- PREPARE OUTPUT ---
+        projects_out = df_proj.replace({np.nan: None}).to_dict(orient='records')
+        organizations_out = df_org.replace({np.nan: None}).to_dict(orient='records')
+
+        return MapDataResponse(
+            projects=projects_out,
+            organizations=organizations_out,
+            country_summary=country_summary_records
+        )
+    except Exception as e:
+        print(f"Error in /map-data: {e}")
+        raise HTTPException(status_code=500, detail=f"Error generating map data: {str(e)}")
